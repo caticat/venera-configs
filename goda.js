@@ -121,7 +121,7 @@ class Goda extends ComicSource {
   minAppVersion = "1.4.0"
 
   // 更新地址
-  url = "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/goda.js"
+  url = "https://raw.githubusercontent.com/caticat/venera-configs/main/goda.js"
 
   settings = {
     domains: {

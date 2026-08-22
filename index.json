@@ -3,7 +3,7 @@
         "name": "拷贝漫画",
         "fileName": "copy_manga.js",
         "key": "copy_manga",
-        "version": "1.4.1"
+        "version": "1.4.2"
     },
     {
         "name": "拷贝漫画(多账号)",
@@ -46,7 +46,7 @@
         "name": "ehentai",
         "fileName": "ehentai.js",
         "key": "ehentai",
-        "version": "1.1.8"
+        "version": "1.2.0"
     },
     {
         "name": "禁漫天堂",
@@ -59,7 +59,7 @@
         "name": "MangaDex",
         "fileName": "manga_dex.js",
         "key": "manga_dex",
-        "version": "1.1.0",
+        "version": "1.1.1",
         "description": "Account feature is not supported yet."
     },
     {
@@ -108,13 +108,13 @@
         "name": "漫蛙吧",
         "fileName": "manwaba.js",
         "key": "manwaba",
-        "version": "1.0.2"
+        "version": "1.0.3"
     },
     {
         "name": "Lanraragi",
         "fileName": "lanraragi.js",
         "key": "lanraragi",
-        "version": "1.1.0"
+        "version": "1.2.0"
     },
     {
         "name": "Komga",

@@ -4,11 +4,11 @@ class CopyManga extends ComicSource {
 
     key = "copy_manga"
 
-    version = "1.4.1"
+    version = "1.4.2"
 
     minAppVersion = "1.6.0"
 
-    url = "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/copy_manga.js"
+    url = "https://raw.githubusercontent.com/caticat/venera-configs/main/copy_manga.js"
 
     async getReqID() {
         if (this.copyRegion === "0") {
@@ -51,13 +51,13 @@ class CopyManga extends ComicSource {
         )
 
         return {
-            "User-Agent": `COPY/3.0.6`,
+            "User-Agent": `COPY/${CopyManga.defaultCopyVersion}`,
             "source": "copyApp",
             "deviceinfo": this.deviceinfo,
             "dt": `${year}.${month}.${day}`,
             "platform": "3",
-            "referer": `com.copymanga.app-3.0.6`,
-            "version": "3.0.6",
+            "referer": `com.copymanga.app-${CopyManga.defaultCopyVersion}`,
+            "version": CopyManga.defaultCopyVersion,
             "device": this.device,
             "pseudoid": this.pseudoid,
             "Accept": "application/json",
@@ -69,7 +69,7 @@ class CopyManga extends ComicSource {
         }
     }
 
-    // static defaultCopyVersion = "3.0.6"
+    static defaultCopyVersion = "3.0.9"
 
     // static defaultCopyPlatform = "2"
 
@@ -78,6 +78,8 @@ class CopyManga extends ComicSource {
     static defaultImageQuality = "1500"
 
     static defaultApiUrl = 'api.copy2000.online'
+
+    static webUrl = "https://www.copy20.com"
 
     static searchApi = "/api/kb/web/searchb/comics"
 
@@ -154,7 +156,15 @@ class CopyManga extends ComicSource {
     }
 
     get apiUrl() {
-        return `https://${this.loadSetting('base_url')}`
+        return `https://${this.apiHost}`
+    }
+
+    get apiHost() {
+        const configured = this.loadSetting('base_url')
+        if (configured && configured !== CopyManga.defaultApiUrl) {
+            return configured
+        }
+        return this.loadData("_api_base_url") || configured || CopyManga.defaultApiUrl
     }
 
     get copyRegion() {
@@ -163,6 +173,248 @@ class CopyManga extends ComicSource {
 
     get imageQuality() {
         return this.loadSetting('image_quality') || this.defaultImageQuality
+    }
+
+    _normalizeImageUrl(url) {
+        return url
+            .split("?")[0]
+            .replace(/([./])c\d+x\.[a-zA-Z]+$/, `$1c${this.imageQuality}x.webp`)
+    }
+
+    async _loadChapterImageUrls(comicId, epId) {
+        let attempt = 0;
+        const maxAttempts = 5;
+
+        while (attempt < maxAttempts) {
+            try {
+                let reqId = await this.getReqID();
+                let res = await Network.get(
+                    `${this.apiUrl}/api/v3/comic/${comicId}/chapter2/${epId}?in_mainland=true&request_id=${reqId}`,
+                    this.headers
+                );
+
+                if (res.status === 210) {
+                    let waitTime = 40000;
+                    let shouldRetry = false;
+                    let message = "";
+                    try {
+                        let responseBody = JSON.parse(res.body);
+                        message = responseBody.message || responseBody.results?.detail || "";
+                        if (
+                            message &&
+                            message.includes("Expected available in")
+                        ) {
+                            shouldRetry = true;
+                            let match = responseBody.message.match(/(\d+)\s*seconds/);
+                            if (match && match[1]) {
+                                waitTime = parseInt(match[1]) * 1000;
+                            }
+                        }
+                    } catch (e) {
+                        console.log("Unable to parse wait time, using default wait time 40s");
+                    }
+                    if (!shouldRetry) {
+                        console.log(`App chapter api limited, fallback to web chapter: ${message}`);
+                        return await this._loadWebChapterImageUrls(comicId, epId);
+                    }
+                    console.log(`Chapter${epId} access too frequent, waiting ${waitTime / 1000}s`);
+                    await new Promise((resolve) => setTimeout(resolve, waitTime));
+                    throw "Retry";
+                }
+
+                if (res.status !== 200) {
+                    throw `Invalid status code: ${res.status}`;
+                }
+
+                let data = JSON.parse(res.body);
+                let imageUrls = data.results.chapter.contents.map((e) => e.url);
+                let orders = data.results.chapter.words;
+                let hdImageUrls = imageUrls.map((url) => this._normalizeImageUrl(url));
+                let images = new Array(hdImageUrls.length).fill("");
+
+                for (let i = 0; i < hdImageUrls.length; i++) {
+                    images[orders[i]] = hdImageUrls[i];
+                }
+
+                return images;
+            } catch (error) {
+                if (error !== "Retry") {
+                    throw error;
+                }
+                attempt++;
+                if (attempt >= maxAttempts) {
+                    throw error;
+                }
+            }
+        }
+    }
+
+    _comicDetailUrl(comicId) {
+        return `${this.apiUrl}/api/v3/comic2/${comicId}?platform=1&_update=true`
+    }
+
+    _match(text, regex, fallback = "") {
+        const match = text.match(regex);
+        return match ? this._htmlDecode(match[1].trim()) : fallback;
+    }
+
+    _htmlDecode(text) {
+        if (!text) {
+            return "";
+        }
+        return text
+            .replace(/&nbsp;/g, " ")
+            .replace(/&amp;/g, "&")
+            .replace(/&quot;/g, "\"")
+            .replace(/&#39;/g, "'")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">");
+    }
+
+    _stripHtml(html) {
+        return this._htmlDecode(
+            (html || "")
+                .replace(/<br\s*\/?>/gi, "\n")
+                .replace(/<[^>]+>/g, "")
+                .replace(/\s+/g, " ")
+                .trim()
+        );
+    }
+
+    _hexToBytes(hex) {
+        const bytes = new Uint8Array(hex.length / 2);
+        for (let i = 0; i < bytes.length; i++) {
+            bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+        }
+        return bytes.buffer;
+    }
+
+    _parseWebEncryptedJson(encrypted, key) {
+        const iv = encrypted.substring(0, 16);
+        const cipherHex = encrypted.substring(16);
+        let plain = Convert.decodeUtf8(Convert.decryptAesCbc(
+            this._hexToBytes(cipherHex),
+            Convert.encodeUtf8(key),
+            Convert.encodeUtf8(iv)
+        )).trim();
+        const end = Math.max(plain.lastIndexOf("}"), plain.lastIndexOf("]"));
+        if (end >= 0) {
+            plain = plain.substring(0, end + 1);
+        }
+        return JSON.parse(plain);
+    }
+
+    async _loadWebChapters(comicId, html) {
+        const ccz = this._match(html, /var\s+ccz\s*=\s*'([^']+)'/);
+        const dnts = this._match(html, /id=["']dnt["'][^>]*value=["']([^"']+)["']/);
+        if (!ccz || !dnts) {
+            throw "Failed to parse web chapter token";
+        }
+
+        const res = await Network.get(
+            `${CopyManga.webUrl}/comicdetail/${comicId}/chapters`,
+            {
+                "dnts": dnts,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            }
+        );
+        if (res.status !== 200) {
+            throw `Invalid status code: ${res.status}`;
+        }
+
+        const encrypted = JSON.parse(res.body).results;
+        const data = this._parseWebEncryptedJson(encrypted, ccz);
+        const keys = Object.keys(data.groups);
+        const result = new Map();
+
+        for (const key of keys) {
+            const group = data.groups[key];
+            const eps = new Map();
+            for (const chapter of group.chapters || []) {
+                eps.set(chapter.id, chapter.name);
+            }
+            result.set(group.name || key, eps);
+        }
+
+        if (this.isAppVersionAfter("1.3.0")) {
+            return result;
+        }
+
+        const merged = new Map();
+        for (const eps of result.values()) {
+            for (const [id, title] of eps) {
+                merged.set(id, title);
+            }
+        }
+        return merged;
+    }
+
+    async _loadWebChapterImageUrls(comicId, epId) {
+        const res = await Network.get(
+            `${CopyManga.webUrl}/comic/${comicId}/chapter/${epId}`,
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            }
+        );
+        if (res.status !== 200) {
+            throw `Invalid status code: ${res.status}`;
+        }
+
+        const html = res.body;
+        const cct = this._match(html, /var\s+cct\s*=\s*'([^']+)'/);
+        const contentKey = this._match(html, /var\s+contentKey\s*=\s*'([^']+)'/);
+        if (!cct || !contentKey) {
+            throw "Failed to parse web chapter images";
+        }
+
+        const data = this._parseWebEncryptedJson(contentKey, cct);
+        return data.map((image) => this._normalizeImageUrl(image.url));
+    }
+
+    async _loadWebComicInfo(id) {
+        const res = await Network.get(
+            `${CopyManga.webUrl}/comic/${id}`,
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            }
+        );
+        if (res.status !== 200) {
+            throw `Invalid status code: ${res.status}`;
+        }
+
+        const html = res.body;
+        const title = this._match(html, /<h6[^>]*title=["']([^"']+)["'][^>]*>/);
+        const cover = this._match(html, /<img[^>]*data-src=["']([^"']+)["'][^>]*>/);
+        const description = this._stripHtml(this._match(html, /<p\s+class=["']intro["'][^>]*>([\s\S]*?)<\/p>/));
+        const updateTime = this._match(html, /最後更新：<\/span>\s*<span[^>]*>([^<]+)<\/span>/);
+        const status = this._match(html, /<span>狀態：<\/span>\s*<span[^>]*>([^<]+)<\/span>/);
+        const subId = this._match(html, /collect\(['"]([^'"]+)['"]\)/);
+        const authors = [];
+        const tags = [];
+
+        for (const match of html.matchAll(/<a\s+href=["']\/author\/[^"']+\/comics["'][^>]*>([\s\S]*?)<\/a>/g)) {
+            authors.push(this._stripHtml(match[1]));
+        }
+        for (const match of html.matchAll(/<a\s+href=["']\/comics\?theme=[^"']+["'][^>]*>([\s\S]*?)<\/a>/g)) {
+            tags.push(this._stripHtml(match[1]).replace(/^#/, ""));
+        }
+
+        const chapters = await this._loadWebChapters(id, html);
+
+        return {
+            title,
+            cover,
+            description,
+            tags: {
+                "作者": authors,
+                "更新": [updateTime],
+                "标签": tags,
+                "状态": [status],
+            },
+            chapters,
+            isFavorite: false,
+            subId,
+        };
     }
 
     init() {
@@ -550,9 +802,8 @@ class CopyManga extends ComicSource {
         addOrDelFavorite: async (comicId, folderId, isAdding) => {
             let is_collect = isAdding ? 1 : 0
             let token = this.loadData("token");
-            let reqId = await this.getReqID();
             let comicData = await Network.get(
-                `${this.apiUrl}/api/v3/comic2/${comicId}?in_mainland=true&request_id=${reqId}&platform=3`,
+                this._comicDetailUrl(comicId),
                 this.headers
             )
             if (comicData.status !== 200) {
@@ -701,17 +952,26 @@ class CopyManga extends ComicSource {
                 }
                 return JSON.parse(res.body).results.collect != null;
             }
-            let reqId = await this.getReqID();
             let results = await Promise.all([
                 Network.get(
-                    `${this.apiUrl}/api/v3/comic2/${id}?in_mainland=true&request_id=${reqId}&platform=3`,
+                    this._comicDetailUrl(id),
                     this.headers
                 ),
                 getFavoriteStatus.bind(this)(id)
             ])
 
             if (results[0].status !== 200) {
-                throw `Invalid status code: ${res.status}`;
+                let message = `Invalid status code: ${results[0].status}`;
+                try {
+                    let body = JSON.parse(results[0].body);
+                    message = body.message || body.results?.detail || message;
+                } catch (e) {
+                }
+                if (results[0].status === 210) {
+                    console.log(`App detail api limited, fallback to web detail: ${message}`);
+                    return await this._loadWebComicInfo(id);
+                }
+                throw message;
             }
 
             let data = JSON.parse(results[0].body).results;
@@ -748,78 +1008,22 @@ class CopyManga extends ComicSource {
             }
         },
         loadEp: async (comicId, epId) => {
-            let attempt = 0;
-            const maxAttempts = 5;
-            let res;
-            let data;
-
-            while (attempt < maxAttempts) {
-                try {
-                    let reqId = await this.getReqID();
-                    res = await Network.get(
-                        `${this.apiUrl}/api/v3/comic/${comicId}/chapter2/${epId}?in_mainland=true&request_id=${reqId}`,
-                        {
-                            ...this.headers
-                        }
+            return {
+                images: await this._loadChapterImageUrls(comicId, epId),
+            }
+        },
+        onImageLoad: (url, comicId, epId) => {
+            return {
+                url,
+                onLoadFailed: async () => {
+                    const images = await this._loadChapterImageUrls(comicId, epId);
+                    const index = images.findIndex((image) =>
+                        this._normalizeImageUrl(image) === this._normalizeImageUrl(url)
                     );
-
-                    if (res.status === 210) {
-                        // 210 indicates too frequent access, extract wait time
-                        let waitTime = 40000; // Default wait time 40s
-                        try {
-                            let responseBody = JSON.parse(res.body);
-                            if (
-                                responseBody.message &&
-                                responseBody.message.includes("Expected available in")
-                            ) {
-                                let match = responseBody.message.match(/(\d+)\s*seconds/);
-                                if (match && match[1]) {
-                                    waitTime = parseInt(match[1]) * 1000;
-                                }
-                            }
-                        } catch (e) {
-                            console.log(
-                                "Unable to parse wait time, using default wait time 40s"
-                            );
-                        }
-                        console.log(`Chapter${epId} access too frequent, waiting ${waitTime / 1000}s`);
-                        await new Promise((resolve) => setTimeout(resolve, waitTime));
-                        throw "Retry";
+                    if (index < 0) {
+                        return null;
                     }
-
-                    if (res.status !== 200) {
-                        throw `Invalid status code: ${res.status}`;
-                    }
-
-                    data = JSON.parse(res.body);
-                    // console.log(data.results.chapter);
-                    // Handle image link sorting
-                    let imagesUrls = data.results.chapter.contents.map((e) => e.url);
-                    let orders = data.results.chapter.words;
-
-                    // Replace origin images urls to selected quality images urls
-                    let hdImagesUrls = imagesUrls.map((url) =>
-                        url.replace(/([./])c\d+x\.[a-zA-Z]+$/, `$1c${this.imageQuality}x.webp`)
-                    )
-
-                    let images = new Array(hdImagesUrls.length).fill(""); // Initialize an array with the same length as imagesUrls
-
-                    // Arrange images according to orders
-                    for (let i = 0; i < hdImagesUrls.length; i++) {
-                        images[orders[i]] = hdImagesUrls[i];
-                    }
-
-                    return {
-                        images: images,
-                    };
-                } catch (error) {
-                    if (error !== "Retry") {
-                        throw error;
-                    }
-                    attempt++;
-                    if (attempt >= maxAttempts) {
-                        throw error;
-                    }
+                    return { url: images[index] };
                 }
             }
         },
@@ -1099,7 +1303,11 @@ class CopyManga extends ComicSource {
         const res = await fetch(url, { headers: this.headers });
         if (res.status === 200) {
             let data = await res.json();
-            this.settings.base_url = data.results.api[0][0];
+            const apiHost = data.results.api?.[0]?.[0];
+            if (apiHost) {
+                this.saveData("_api_base_url", apiHost);
+                this.settings.base_url.default = apiHost;
+            }
         }
     }
 }

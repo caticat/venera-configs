@@ -130,7 +130,7 @@ class JComic extends ComicSource {
   minAppVersion = "1.4.6";
 
   url =
-    "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/jcomic.js";
+    "https://raw.githubusercontent.com/caticat/venera-configs/main/jcomic.js";
 
   currentComic = null;
 
